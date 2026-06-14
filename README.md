@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/angelnicolasc/graymatter/actions/workflows/ci.yml"><img src="https://github.com/angelnicolasc/graymatter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pkg.go.dev/github.com/angelnicolasc/graymatter"><img src="https://pkg.go.dev/badge/github.com/angelnicolasc/graymatter.svg" alt="Go Reference"></a>
-  <a href="https://github.com/angelnicolasc/graymatter/releases/tag/v0.5.1"><img src="https://img.shields.io/github/v/release/angelnicolasc/graymatter" alt="Latest Release"></a>
+  <a href="https://github.com/angelnicolasc/graymatter/releases/tag/v0.6.0"><img src="https://img.shields.io/github/v/release/angelnicolasc/graymatter" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/coverage-73.5%25-brightgreen" alt="Coverage 73.5%">
   <img src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-blue" alt="Platforms">
   <img src="https://goreportcard.com/badge/github.com/angelnicolasc/graymatter" alt="Go Report Card">
@@ -103,22 +103,22 @@ The dashboard auto-refreshes every 5 seconds. Press `1–4` to switch tabs,
 
 ```bash
 # Linux (x86_64)
-curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.5.1/graymatter_0.5.1_linux_amd64.tar.gz
+curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.6.0/graymatter_0.6.0_linux_amd64.tar.gz
 tar -xzf graymatter.tar.gz
 sudo mv graymatter /usr/local/bin/
 
 # Linux (ARM64)
-curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.5.1/graymatter_0.5.1_linux_arm64.tar.gz
+curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.6.0/graymatter_0.6.0_linux_arm64.tar.gz
 tar -xzf graymatter.tar.gz
 sudo mv graymatter /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.5.1/graymatter_0.5.1_darwin_arm64.tar.gz
+curl -sSL -o graymatter.tar.gz https://github.com/angelnicolasc/graymatter/releases/download/v0.6.0/graymatter_0.6.0_darwin_arm64.tar.gz
 tar -xzf graymatter.tar.gz
 sudo mv graymatter /usr/local/bin/
 
 # Windows (PowerShell)
-iwr https://github.com/angelnicolasc/graymatter/releases/download/v0.5.1/graymatter_0.5.1_windows_amd64.zip -OutFile graymatter.zip
+iwr https://github.com/angelnicolasc/graymatter/releases/download/v0.6.0/graymatter_0.6.0_windows_amd64.zip -OutFile graymatter.zip
 Expand-Archive graymatter.zip -DestinationPath .\graymatter_cli
 ```
 
@@ -144,6 +144,11 @@ graymatter init
 One command auto-wires GrayMatter into every supported client at once.
 Existing entries from other MCP servers are **merged, not overwritten** —
 safe to run in any repo.
+
+`init` also drops a managed **memory block into `CLAUDE.md` and
+`AGENTS.md`** so the model is actually told to call the tools (skip with
+`--skip-instructions`). Your own content in those files is preserved; only
+the marked block is managed.
 
 | Client | Config file auto-wired | Scope |
 |--------|------------------------|-------|
@@ -210,6 +215,29 @@ JSON into the editor's global config — `~/.cursor/mcp.json` for Cursor,
 `graymatter` must be on `PATH`. The `init` command handles this
 automatically on Windows via the User `PATH` registry; on macOS / Linux
 the recommended install path `/usr/local/bin` is already on `PATH`.
+
+### Troubleshooting — "MCP is connected but nothing gets stored"
+
+Run the built-in diagnosis first:
+
+```bash
+graymatter doctor        # human-readable
+graymatter doctor --json # scriptable
+```
+
+It checks the full chain: binary on `PATH` → data dir writable → store
+health and lock state → MCP wiring per client → agent instructions present.
+
+The two most common failure modes it catches:
+
+1. **No instructions.** An MCP connection only makes tools *available* —
+   nothing tells the model to call them. If `CLAUDE.md` / `AGENTS.md`
+   don't mention the memory tools, the agent will happily chat for an hour
+   and never write a fact. Fix: `graymatter init` (writes the block for you).
+2. **Orphaned manual server.** MCP clients spawn `graymatter mcp serve`
+   themselves. If you also started one manually in a terminal, it holds
+   the single-writer bbolt lock and the client's own instance can't open
+   the store. Fix: kill the manual process.
 
 ---
 
@@ -579,9 +607,12 @@ packaged as a library you import in three lines.
 - [x] go.work workspace — core library imports zero TUI/CLI dependencies
 - [x] Three-platform CI (Linux, macOS, Windows) + 73.5% coverage gate
 - [x] Fuzz testing: `FuzzTokenize`, `FuzzUnmarshalFact`, `FuzzKeywordScore`
+- [x] Daemon mode — concurrent store access; TUI/MCP/CLI connect to one store owner over a local socket (net/rpc, stdlib-only), launch-on-connect + idle-exit, token auth
+- [x] `graymatter doctor` — end-to-end setup diagnosis; `init` writes the agent memory block into CLAUDE.md / AGENTS.md
+- [ ] Cross-project memory federation (read-only) — query a registered project's memory from another ([#12](https://github.com/angelnicolasc/graymatter/issues/12))
 - [ ] Ollama-backed consolidation LLM (Ollama as summariser, not just embedder)
 - [ ] WebSocket streaming for REST API
 
 ---
 
-*GrayMatter — v0.5.1 — April 2026*
+*GrayMatter — v0.6.0 — June 2026*

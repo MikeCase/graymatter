@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
-	graymatter "github.com/angelnicolasc/graymatter"
 	"github.com/angelnicolasc/graymatter/cmd/graymatter/internal/harness"
 	"github.com/angelnicolasc/graymatter/cmd/graymatter/internal/kg"
 	"github.com/angelnicolasc/graymatter/pkg/memory"
@@ -124,9 +123,9 @@ const (
 // ── Main model ────────────────────────────────────────────────────────────────
 
 type tuiModel struct {
-	store   graymatter.AdvancedStore
-	dataDir string
-	graph   *kg.Graph
+	store    cliStore
+	dataDir  string
+	readOnly bool // true when the store is in read-only mode (--no-daemon only)
 
 	// layout
 	activeTab tabID
@@ -195,7 +194,7 @@ func (m tuiModel) loadFacts(agentID string) tea.Cmd {
 
 func (m tuiModel) loadSessions() tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := harness.ListSessionsDB(m.store.DB())
+		sessions, err := m.store.SessionsList()
 		if err != nil {
 			return sessionsLoadedMsg{} // non-fatal
 		}
@@ -208,11 +207,8 @@ func (m tuiModel) loadSessions() tea.Cmd {
 }
 
 func (m tuiModel) loadNodes() tea.Cmd {
-	if m.graph == nil {
-		return nil
-	}
 	return func() tea.Msg {
-		nodes, err := m.graph.AllNodes()
+		nodes, err := m.store.KGNodes()
 		if err != nil {
 			return nodesLoadedMsg{}
 		}
@@ -358,6 +354,10 @@ func (m *tuiModel) updateMemoryKey(msg tea.KeyMsg) []tea.Cmd {
 			}
 		}
 	case "d":
+		if m.readOnly {
+			m.status = "read-only: cannot delete facts while another process holds the store"
+			return nil
+		}
 		if m.memPane == memPaneFacts {
 			if sel, ok := m.factList.SelectedItem().(factItem); ok {
 				if agSel, ok2 := m.agentList.SelectedItem().(agentItem); ok2 {
@@ -378,8 +378,12 @@ func (m *tuiModel) updateSessionsKey(msg tea.KeyMsg) []tea.Cmd {
 	case "r":
 		return []tea.Cmd{m.loadSessions()}
 	case "k":
+		if m.readOnly {
+			m.status = "read-only: cannot kill sessions while another process holds the store"
+			return nil
+		}
 		if sel, ok := m.sessionList.SelectedItem().(sessionItem); ok {
-			if err := harness.KillSession(sel.s.ID, m.dataDir); err != nil {
+			if err := m.store.SessionKill(sel.s.ID); err != nil {
 				m.status = "kill: " + err.Error()
 			} else {
 				m.status = "Killed " + sel.s.ID[:8]
@@ -437,7 +441,13 @@ func (m tuiModel) renderHeader() string {
 		statusChip = "  " + styleSubText.Render("· "+m.status)
 	}
 
-	left := lipgloss.JoinHorizontal(lipgloss.Top, logo, " ", tabBar, statusChip)
+	// Read-only badge: shown when the store is locked by another process.
+	roBadge := ""
+	if m.readOnly {
+		roBadge = "  " + styleStatusFail.Render("⊘ read-only")
+	}
+
+	left := lipgloss.JoinHorizontal(lipgloss.Top, logo, " ", tabBar, statusChip, roBadge)
 
 	// Justify left/right across full width.
 	leftW := lipgloss.Width(left)
@@ -480,19 +490,27 @@ func (m tuiModel) renderFooter() string {
 	var groups []string
 	switch m.activeTab {
 	case tabMemory:
+		mutKeys := k("d") + " " + styleDimText.Render("delete") + "  "
+		if m.readOnly {
+			mutKeys = styleStatusFail.Render("d") + " " + styleDimText.Render("(read-only)") + "  "
+		}
 		groups = []string{
 			k("j/k") + " " + styleDimText.Render("nav") + "  " +
 				k("←/→") + " " + styleDimText.Render("pane"),
 			k("enter") + " " + styleDimText.Render("select") + "  " +
-				k("d") + " " + styleDimText.Render("delete") + "  " +
+				mutKeys +
 				k("r") + " " + styleDimText.Render("refresh"),
 			k("1-4") + " " + styleDimText.Render("tabs") + "  " +
 				k("q") + " " + styleDimText.Render("quit"),
 		}
 	case tabSessions:
+		killKey := k("k") + " " + styleDimText.Render("kill") + "  "
+		if m.readOnly {
+			killKey = styleStatusFail.Render("k") + " " + styleDimText.Render("(read-only)") + "  "
+		}
 		groups = []string{
 			k("j/k") + " " + styleDimText.Render("nav"),
-			k("k") + " " + styleDimText.Render("kill") + "  " +
+			killKey +
 				k("r") + " " + styleDimText.Render("refresh"),
 			k("1-4") + " " + styleDimText.Render("tabs") + "  " +
 				k("q") + " " + styleDimText.Render("quit"),
@@ -538,9 +556,9 @@ func (m tuiModel) renderSessions(h int) string {
 // ── Graph tab ─────────────────────────────────────────────────────────────────
 
 func (m tuiModel) renderGraph(h int) string {
-	if m.graph == nil {
+	if len(m.nodeList.Items()) == 0 {
 		return styleBorderInactive.Width(m.width - 4).Height(h - 2).
-			Render(styleDimText.Render("\n  Knowledge graph not initialised.\n  Run `graymatter init` and store some memories first."))
+			Render(styleDimText.Render("\n  Knowledge graph empty.\n  Run `graymatter init` and store some memories first."))
 	}
 	leftW := m.width * 2 / 5
 	leftPane := styleBorderInactive.Width(leftW - 2).Height(h - 2).Render(m.nodeList.View())
@@ -606,7 +624,9 @@ func max(a, b int) int {
 // ── Command wiring ─────────────────────────────────────────────────────────────
 
 func tuiCmd() *cobra.Command {
-	return &cobra.Command{
+	var forceReadOnly bool
+
+	cmd := &cobra.Command{
 		Use:   "tui",
 		Short: "Observability dashboard for GrayMatter",
 		Long: `Interactive 4-view terminal UI for GrayMatter.
@@ -615,29 +635,23 @@ Views (switch with 1-4 or tab/shift+tab):
   1. Memory   — browse agents, facts, and full fact detail
   2. Sessions — view and kill managed agent sessions
   3. Graph    — browse knowledge graph nodes and edges
-  4. Stats    — observability dashboard (KPIs, agent activity, weight distribution, 30d sparkline)`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := graymatter.DefaultConfig()
-			cfg.DataDir = dataDir
+  4. Stats    — observability dashboard (KPIs, agent activity, weight distribution, 30d sparkline)
 
-			mem, err := graymatter.NewWithConfig(cfg)
+By default the TUI connects to the store daemon, so it runs fine alongside an
+MCP server, opencode, or another TUI. --read-only applies only with --no-daemon
+(direct in-process open), where it forces a non-mutating open.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// --read-only only makes sense for the direct (--no-daemon) path;
+			// through the daemon every client is a full read/write peer.
+			if forceReadOnly {
+				noDaemon = true
+			}
+
+			store, err := openStore()
 			if err != nil {
 				return err
 			}
-			defer mem.Close()
-
-			store := mem.Advanced()
-			if store == nil {
-				return fmt.Errorf("store not initialised")
-			}
-
-			// Optional: open KG graph if db is available.
-			var graph *kg.Graph
-			if db := store.DB(); db != nil {
-				if g, err := kg.Open(db); err == nil {
-					graph = g
-				}
-			}
+			defer func() { _ = store.Close() }()
 
 			newList := func(title string) list.Model {
 				l := list.New(nil, list.NewDefaultDelegate(), 40, 20)
@@ -650,7 +664,7 @@ Views (switch with 1-4 or tab/shift+tab):
 			m := tuiModel{
 				store:       store,
 				dataDir:     dataDir,
-				graph:       graph,
+				readOnly:    store.IsReadOnly(),
 				agentList:   newList("Agents"),
 				factList:    newList("Facts"),
 				sessionList: newList("Sessions"),
@@ -664,4 +678,8 @@ Views (switch with 1-4 or tab/shift+tab):
 			return err
 		},
 	}
+
+	cmd.Flags().BoolVar(&forceReadOnly, "read-only", false,
+		"with --no-daemon: open the store read-only (skips all mutating operations)")
+	return cmd
 }

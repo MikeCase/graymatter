@@ -103,6 +103,19 @@ type Config struct {
 	// Default: 30s. Set to 0 to disable the background loop (reconciliation
 	// will then only run at Open()).
 	VectorReconcileInterval time.Duration
+
+	// ReadOnly opens the store in read-only mode, skipping all mutating
+	// operations. When false (default), the TUI and CLI automatically fall
+	// back to read-only if the write lock is held by another process (e.g.
+	// opencode running in the same directory).
+	ReadOnly bool
+
+	// StrictWrite disables the automatic read-only fallback: if the write
+	// lock cannot be acquired, Open fails immediately instead of degrading.
+	// The store daemon sets this — a store owner that silently came up
+	// read-only would break every connected client. StrictWrite wins over
+	// ReadOnly when both are set.
+	StrictWrite bool
 }
 
 // DefaultConfig returns a Config with all defaults applied from environment
