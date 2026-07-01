@@ -54,7 +54,10 @@ func knownAgents(projectDir string) []agentDef {
 		},
 		{
 			id: "antigravity", name: "Antigravity", configDesc: "mcp_config.json",
-			instructionFile: "",
+			// Antigravity reads AGENTS.md (project root cross-tool standard)
+			// alongside its own GEMINI.md. AGENTS.md is sufficient here — see
+			// https://antigravity.codes/blog/antigravity-agents-md-guide
+			instructionFile: "AGENTS.md",
 			run:             func() (writeResult, error) { return writeAntigravityProject(projectDir) },
 		},
 	}

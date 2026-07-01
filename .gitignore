@@ -4,7 +4,5 @@ dist/
 .graymatter/
 *.db
 /vectors/
-*.local.md
 *.md.local
 go.work.sum
-opencode.jsonc
